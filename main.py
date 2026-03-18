@@ -1,0 +1,174 @@
+import os
+import random
+import torch
+import torch.nn as nn
+import torch.nn.parallel
+import torch.optim as optim
+import torch.utils.data
+import torchvision.datasets as dset
+import torchvision.transforms as transforms
+import torchvision.utils as vutils
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+
+from config import *
+from  weight_init import weights_init
+from generator import Generator
+from discriminator import Discriminator
+
+manualSeed = 67
+random.seed(manualSeed)
+torch.manual_seed(manualSeed)
+torch.use_deterministic_algorithms(True)
+device = torch.device("cuda:0" if (torch.cuda.is_available() and ngpu > 0) else "cpu")
+
+output_folder = "outputs"
+weights_folder = "weights"
+os.makedirs(output_folder, exist_ok=True)
+os.makedirs(weights_folder, exist_ok=True)
+
+# Make DataLoader
+dataset = dset.ImageFolder(root=dataroot,
+                           transform=transforms.Compose([
+                               transforms.Resize(image_size),
+                               transforms.CenterCrop(image_size),
+                               transforms.ToTensor(),
+                               transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                           ]))
+dataloader = torch.utils.data.DataLoader(dataset, 
+                                         batch_size=batch_size,
+                                         shuffle=True, 
+                                         num_workers=workers,
+                                         pin_memory=True)
+
+# Create the generator
+netG = Generator(ngpu).to(device)
+# Create the Discriminator
+netD = Discriminator(ngpu).to(device)
+# if (device.type == 'cuda') and (ngpu > 1):
+#     netG = nn.DataParallel(netG, list(range(ngpu))) # Parralel if have more than one GPU, mostly unused cuz I don't have more than one GPU, but still put it here
+#     netD = nn.DataParallel(netD, list(range(ngpu))) # Just like G, D can also be trained parallel, but unused cuz in config I set ngpu to 1
+
+
+# Apply the weights_init function to randomly initialize all weights
+#  to mean=0, stdev=0.02
+netG.apply(weights_init)
+netD.apply(weights_init)
+
+criterion = nn.BCELoss()
+
+# Create batch of latent vectors that we will use to visualize the progression of the generator
+fixed_noise = torch.randn(64, nz, 1, 1, device=device)
+
+# Establish convention for real and fake labels during training
+real_label = 1.
+fake_label = 0.
+
+optimizerD = optim.Adam(netD.parameters(), lr=lr, betas=(beta1, 0.999))
+optimizerG = optim.Adam(netG.parameters(), lr=lr, betas=(beta1, 0.999))
+
+# Training Loop
+img_list = []
+G_losses = []
+D_losses = []
+iters = 0
+
+print("Starting Training Loop...")
+for epoch in range(num_epochs):
+    for i, data in enumerate(dataloader, 0):
+
+        ##############################
+        # (1) Update D network: maximize log(D(x)) + log(1 - D(G(z)))
+        ###########################
+        ## Train with all-real batch
+        netD.zero_grad()
+        real_cpu = data[0].to(device)
+        b_size = real_cpu.size(0)
+        label = torch.full((b_size,), real_label, dtype=torch.float, device=device)
+        # Forward pass real batch through D
+        output = netD(real_cpu).view(-1)
+        # Calculate loss on all-real batch
+        errD_real = criterion(output, label)
+        # Calculate gradients for D in backward pass
+        errD_real.backward()
+        D_x = output.mean().item()
+
+        ## Train with all-fake batch
+        # Generate batch of latent vectors
+        noise = torch.randn(b_size, nz, 1, 1, device=device)
+        # Generate fake image batch with G
+        fake = netG(noise)
+        label.fill_(fake_label)
+        # Classify all fake batch with D
+        output = netD(fake.detach()).view(-1)
+        # Calculate D's loss on the all-fake batch
+        errD_fake = criterion(output, label)
+        # Calculate the gradients for this batch, accumulated (summed) with previous gradients
+        errD_fake.backward()
+        D_G_z1 = output.mean().item()
+        # Compute error of D as sum over the fake and the real batches
+        errD = errD_real + errD_fake
+        # Update D
+        optimizerD.step()
+
+        ###############################
+        # (2) Update G network: maximize log(D(G(z)))
+        ###########################
+        netG.zero_grad()
+        label.fill_(real_label)  # fake labels are real for generator cost
+        # Since we just updated D, perform another forward pass of all-fake batch through D
+        output = netD(fake).view(-1)
+        # Calculate G's loss based on this output
+        errG = criterion(output, label)
+        # Calculate gradients for G
+        errG.backward()
+        D_G_z2 = output.mean().item()
+        # Update G
+        optimizerG.step()
+
+        # Output training stats
+        if i % 50 == 0:
+            print('[%d/%d][%d/%d]\tLoss_D: %.4f\tLoss_G: %.4f\tD(x): %.4f\tD(G(z)): %.4f / %.4f'
+                  % (epoch, num_epochs, i, len(dataloader),
+                     errD.item(), errG.item(), D_x, D_G_z1, D_G_z2))
+
+        # Save Losses for plotting later
+        G_losses.append(errG.item())
+        D_losses.append(errD.item())
+
+        # Check how the generator is doing by saving G's output on fixed_noise
+        if (iters % 500 == 0) or ((epoch == num_epochs-1) and (i == len(dataloader)-1)):
+            with torch.no_grad():
+                fake = netG(fixed_noise).detach().cpu()
+            grid = vutils.make_grid(fake, padding=2, normalize=True) # Create image grid
+            img_list.append(vutils.make_grid(fake, padding=2, normalize=True))
+
+            vutils.save_image(grid, f"output/fake_samples_epoch_{epoch}_iter_{iters}.png") # Save the static image one by one 
+        iters += 1
+
+    # Update the plot real time for visualization
+    plt.figure(figsize=(10,5))
+    plt.title("Generator and Discriminator Loss During Training")
+    plt.plot(G_losses,label="G")
+    plt.plot(D_losses,label="D")
+    plt.xlabel("iterations")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.savefig("/home/insomnia/1Code_Workspace/ADL/output/loss_plot.png", dpi=300)
+    plt.close()
+
+# Saving weights, can be move inside the Training loop if wwant to update the weigth after each epoch like the plit
+print("Training finished!")
+torch.save(netG.state_dict(), "/home/insomnia/1Code_Workspace/ADL/weights/netGenerator.pth")
+torch.save(netD.state_dict(), "/home/insomnia/1Code_Workspace/ADL/weights/netDiscriminator.pth")
+print(f"Weights saved successfully in {weights_folder} folder.")
+
+
+# # Saving GIF Animation, this part just so that I can use to make the slide, dont need to read this
+# fig = plt.figure(figsize=(8,8))
+# plt.axis("off")
+# ims = [[plt.imshow(np.transpose(i.numpy(), (1, 2, 0)), animated=True)] for i in img_list]
+# ani = animation.ArtistAnimation(fig, ims, interval=1000, repeat_delay=1000, blit=True)
+# ani.save("/home/insomnia/1Code_Workspace/ADL/output/generation_animation.gif", writer="pillow")
+# plt.close(fig)

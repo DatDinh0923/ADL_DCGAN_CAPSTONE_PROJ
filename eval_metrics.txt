@@ -1,0 +1,23 @@
+>> LƯU Ý ĐỌC CHỈ SỐ:
+- MS-SSIM: Gần 0.2~0.3 là hoàn hảo (Đa dạng tốt). Nếu > 0.6 là bị Mode Collapse.
+- FID / KID: Càng thấp càng tốt (Ảnh càng giống tập CelebA gốc).
+==================================================
+64px OG model
+1. MS-SSIM : 0.2779
+2. FID Score : 100.86
+3. KID Score : 0.11437
+
+SN_64px_bs128
+ 1. MS-SSIM : 0.2798
+ 2. FID Score : 100.75
+ 3. KID Score : 0.11731
+
+SN_DropOut_64px_bs128
+ 1. MS-SSIM : 0.2857
+ 2. FID Score : 102.24
+ 3. KID Score : 0.11694
+
+SN_DropOut_128px_bs64 ***
+ 1. MS-SSIM : 0.2782
+ 2. FID Score : 68.68
+ 3. KID Score : 0.05434
